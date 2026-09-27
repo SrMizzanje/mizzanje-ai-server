@@ -1,60 +1,73 @@
 import express from "express";
-import OpenAI from "openai";
 
 const app = express();
 
-// Permite receber JSON
+// Permite receber dados em JSON
 app.use(express.json());
 
 // ========================================
-// OPENAI
+// CONFIGURAÇÃO DO GEMINI
 // ========================================
-// A chave fica armazenada no Render.
-// NÃO coloque a chave sk-... neste arquivo.
-const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
-});
+
+// A chave está armazenada com segurança no Render
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+
+// Modelo usado pelo Mizzanje
+const GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 // ========================================
 // ROTA PRINCIPAL
 // ========================================
-// Serve para verificar se o servidor está funcionando.
+
 app.get("/", (req, res) => {
 
-    res.send("Mizzanje AI está online!");
+    res.send("Mizzanje AI está online com Gemini!");
 
 });
 
 // ========================================
 // ROTA DE CONVERSA
 // ========================================
+
 app.post("/conversar", async (req, res) => {
 
     try {
 
-        // Recebe a mensagem enviada pelo celular
-        const mensagem = req.body.mensagem;
+        // ========================================
+        // VERIFICA A CHAVE
+        // ========================================
 
-        // Verifica se existe uma mensagem
-        if (!mensagem) {
+        if (!GEMINI_API_KEY) {
 
-            return res.status(400).json({
-                erro: "Nenhuma mensagem recebida."
+            console.error("GEMINI_API_KEY não encontrada.");
+
+            return res.status(500).json({
+                erro: "A chave GEMINI_API_KEY não está configurada no servidor."
             });
 
         }
 
-        console.log("Mensagem recebida:", mensagem);
-
         // ========================================
-        // ENVIA A PERGUNTA PARA A OPENAI
+        // RECEBE A MENSAGEM
         // ========================================
 
-        const response = await openai.responses.create({
+        const mensagem = req.body.mensagem;
 
-            model: "gpt-5.4-mini",
+        if (!mensagem || typeof mensagem !== "string") {
 
-            instructions: `
+            return res.status(400).json({
+                erro: "Nenhuma mensagem válida foi recebida."
+            });
+
+        }
+
+        console.log("Mensagem recebida pelo Mizzanje.");
+
+        // ========================================
+        // PERSONALIDADE DO MIZZANJE
+        // ========================================
+
+        const instrucao = `
 Você é Mizzanje, um assistente virtual pessoal.
 
 Seu nome é Mizzanje.
@@ -63,62 +76,156 @@ Converse sempre em português do Brasil.
 
 Responda de maneira natural, amigável e objetiva.
 
-Você está sendo usado através de um assistente por voz
+Você está sendo utilizado através de um assistente por voz
 instalado em um celular Android.
 
-Como suas respostas normalmente serão faladas em voz alta,
-evite respostas desnecessariamente longas.
+Suas respostas normalmente serão lidas em voz alta pelo celular.
 
-Você pode conversar com o usuário, responder perguntas,
-explicar assuntos e ajudar a organizar atividades.
+Por isso:
 
-Quando não souber alguma informação, diga claramente que
-não sabe em vez de inventar uma resposta.
+- Evite respostas desnecessariamente longas.
+- Use linguagem natural.
+- Evite formatação complicada.
+- Não use tabelas quando não forem necessárias.
+- Não fique repetindo que você é uma inteligência artificial.
+- Quando não souber alguma coisa, diga claramente que não sabe.
+- Nunca invente informações.
 
-Futuramente você também poderá criar lembretes,
-alarmes e executar outras funções no celular.
-`,
+Você pode conversar, responder perguntas, explicar assuntos
+e ajudar o usuário em tarefas do cotidiano.
 
-            input: mensagem
+Futuramente o aplicativo poderá executar ações como:
+criar lembretes, alarmes e outras funções no celular.
+
+Mensagem do usuário:
+
+${mensagem}
+`;
+
+        // ========================================
+        // ENVIA PARA O GEMINI
+        // ========================================
+
+        const url =
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
+
+        const respostaGemini = await fetch(url, {
+
+            method: "POST",
+
+            headers: {
+
+                "Content-Type": "application/json",
+
+                "x-goog-api-key": GEMINI_API_KEY
+
+            },
+
+            body: JSON.stringify({
+
+                contents: [
+                    {
+                        role: "user",
+
+                        parts: [
+                            {
+                                text: instrucao
+                            }
+                        ]
+                    }
+                ]
+
+            })
 
         });
 
         // ========================================
-        // PEGA A RESPOSTA
+        // LÊ A RESPOSTA DO GOOGLE
         // ========================================
 
-        const resposta = response.output_text;
+        const dados = await respostaGemini.json();
 
-        console.log("Resposta do Mizzanje:", resposta);
+        // ========================================
+        // VERIFICA ERROS DO GEMINI
+        // ========================================
 
-        // Envia a resposta para o aplicativo
+        if (!respostaGemini.ok) {
+
+            console.error(
+                "Erro retornado pelo Gemini:",
+                JSON.stringify(dados)
+            );
+
+            return res.status(respostaGemini.status).json({
+
+                erro: "Erro ao acessar o Gemini",
+
+                status: respostaGemini.status,
+
+                mensagem:
+                    dados?.error?.message ||
+                    "Erro desconhecido retornado pelo Gemini."
+
+            });
+
+        }
+
+        // ========================================
+        // PEGA O TEXTO GERADO
+        // ========================================
+
+        const resposta =
+            dados?.candidates?.[0]?.content?.parts
+                ?.map(parte => parte.text || "")
+                .join("")
+                .trim();
+
+        // ========================================
+        // VERIFICA SE VEIO UMA RESPOSTA
+        // ========================================
+
+        if (!resposta) {
+
+            console.error(
+                "Gemini não retornou texto:",
+                JSON.stringify(dados)
+            );
+
+            return res.status(500).json({
+
+                erro: "O Gemini não retornou uma resposta em texto."
+
+            });
+
+        }
+
+        console.log("Mizzanje respondeu com sucesso.");
+
+        // ========================================
+        // DEVOLVE PARA O CELULAR
+        // ========================================
+
         return res.json({
+
             resposta: resposta
+
         });
 
     } catch (error) {
 
         // ========================================
-        // MOSTRA O ERRO PARA DIAGNÓSTICO
+        // ERRO GERAL
         // ========================================
 
-        console.error("Erro OpenAI:", error);
+        console.error("Erro no servidor:", error);
 
         return res.status(500).json({
 
-            erro: "Erro na OpenAI",
+            erro: "Erro interno do servidor.",
 
             mensagem:
                 error?.message ||
-                "Erro desconhecido ao acessar a OpenAI.",
-
-            status:
-                error?.status ||
-                null,
-
-            codigo:
-                error?.code ||
-                null
+                "Erro desconhecido."
 
         });
 
@@ -136,6 +243,8 @@ app.listen(PORT, "0.0.0.0", () => {
 
     console.log("--------------------------------------");
     console.log("Mizzanje AI iniciado!");
+    console.log("IA: Google Gemini");
+    console.log(`Modelo: ${GEMINI_MODEL}`);
     console.log(`Porta: ${PORT}`);
     console.log("--------------------------------------");
 
